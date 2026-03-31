@@ -139,37 +139,93 @@ def save_drift_log(log_data: Dict):
 def run_drift_detection():
     logger.info("Running drift detection...")
 
-    current_docs = load_processed_documents()
-    baseline_docs = load_baseline()
+    try:
+        # ===============================
+        # LOAD DOCUMENTS
+        # ===============================
+        current_docs = load_processed_documents()
+        baseline_docs = load_baseline()
 
-    if baseline_docs is None:
-        logger.info("No baseline found. Creating baseline.")
-        save_baseline(current_docs)
-        return
+        if not current_docs:
+            logger.warning("No processed documents found. Skipping drift detection.")
+            return
 
-    old_docs = list(baseline_docs.values())
-    new_docs = list(current_docs.values())
+        # ===============================
+        # FIRST RUN → CREATE BASELINE + LOG
+        # ===============================
+        if baseline_docs is None:
+            logger.info("No baseline found. Creating baseline.")
 
-    tfidf_shift = compute_tfidf_shift(old_docs, new_docs)
-    length_drift = compute_length_drift(old_docs, new_docs)
-    kl_div = compute_kl_divergence(old_docs, new_docs)
-    timestamp = get_latest_timestamp()
+            save_baseline(current_docs)
 
-    policy_changed = detect_policy_change(tfidf_shift, length_drift, kl_div)
+            timestamp = get_latest_timestamp()
 
-    log_data = {
-        "timestamp": timestamp,
-        "num_files": len(current_docs),
-        "tfidf_shift": tfidf_shift,
-        "length_drift": length_drift,
-        "kl_divergence": kl_div,
-        "policy_changed": policy_changed
-    }
+            log_data = {
+                "timestamp": timestamp,
+                "num_files": len(current_docs),
+                "tfidf_shift": 0.0,
+                "length_drift": 0.0,
+                "kl_divergence": 0.0,
+                "policy_changed": "NO"
+            }
 
-    save_drift_log(log_data)
+            save_drift_log(log_data)
 
-    if policy_changed == "YES":
-        logger.info("Policy changed → updating baseline")
-        save_baseline(current_docs)
+            logger.info("Initial baseline created and logged successfully")
+            return
 
-    logger.info("Drift detection completed")
+        # ===============================
+        # DRIFT COMPUTATION
+        # ===============================
+        old_docs = list(baseline_docs.values())
+        new_docs = list(current_docs.values())
+
+        tfidf_shift = compute_tfidf_shift(old_docs, new_docs)
+        length_drift = compute_length_drift(old_docs, new_docs)
+        kl_div = compute_kl_divergence(old_docs, new_docs)
+        timestamp = get_latest_timestamp()
+
+        # ✅ safer logging (no multiline f-string issues)
+        logger.info(
+            "Drift Metrics → TF-IDF: %.4f | Length: %.4f | KL: %.4f",
+            tfidf_shift,
+            length_drift,
+            kl_div
+        )
+
+        # ===============================
+        # DECISION
+        # ===============================
+        policy_changed = detect_policy_change(
+            tfidf_shift,
+            length_drift,
+            kl_div
+        )
+
+        # ===============================
+        # LOGGING
+        # ===============================
+        log_data = {
+            "timestamp": timestamp,
+            "num_files": len(current_docs),
+            "tfidf_shift": tfidf_shift,
+            "length_drift": length_drift,
+            "kl_divergence": kl_div,
+            "policy_changed": policy_changed
+        }
+
+        save_drift_log(log_data)
+
+        # ===============================
+        # BASELINE UPDATE (IF DRIFT)
+        # ===============================
+        if policy_changed == "YES":
+            logger.info("Policy change detected → updating baseline")
+            save_baseline(current_docs)
+        else:
+            logger.info("No significant policy change detected")
+
+        logger.info("Drift detection completed successfully")
+
+    except Exception as e:
+        logger.exception("Drift detection failed: %s", str(e))
