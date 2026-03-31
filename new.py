@@ -1,4 +1,3 @@
-
 import pickle
 import numpy as np
 import pandas as pd
@@ -22,7 +21,7 @@ logger = get_logger(__name__)
 
 
 # ===============================
-# Load Documents
+# LOAD DOCUMENTS
 # ===============================
 def load_processed_documents() -> Dict[str, str]:
     docs = {}
@@ -38,7 +37,7 @@ def load_processed_documents() -> Dict[str, str]:
 
 
 # ===============================
-# TF-IDF Drift
+# TF-IDF DRIFT
 # ===============================
 def compute_tfidf_shift(old_docs: List[str], new_docs: List[str]) -> float:
     vectorizer = TfidfVectorizer(max_features=1000)
@@ -54,7 +53,7 @@ def compute_tfidf_shift(old_docs: List[str], new_docs: List[str]) -> float:
 
 
 # ===============================
-# Length Drift
+# LENGTH DRIFT
 # ===============================
 def compute_length_drift(old_docs: List[str], new_docs: List[str]) -> float:
     old_len = np.mean([len(d) for d in old_docs])
@@ -64,7 +63,7 @@ def compute_length_drift(old_docs: List[str], new_docs: List[str]) -> float:
 
 
 # ===============================
-# KL Divergence
+# KL DIVERGENCE
 # ===============================
 def compute_kl_divergence(old_docs: List[str], new_docs: List[str]) -> float:
     vectorizer = TfidfVectorizer(max_features=1000)
@@ -82,7 +81,7 @@ def compute_kl_divergence(old_docs: List[str], new_docs: List[str]) -> float:
 
 
 # ===============================
-# Timestamp
+# TIMESTAMP
 # ===============================
 def get_latest_timestamp() -> str:
     times = [file.stat().st_mtime for file in PROCESSED_DIR.glob("*.txt")]
@@ -90,7 +89,7 @@ def get_latest_timestamp() -> str:
 
 
 # ===============================
-# Baseline
+# BASELINE
 # ===============================
 def load_baseline():
     if DRIFT_BASELINE_PATH.exists():
@@ -109,7 +108,7 @@ def save_baseline(docs: Dict[str, str]):
 
 
 # ===============================
-# Decision Logic
+# GLOBAL DECISION
 # ===============================
 def detect_policy_change(tfidf, length, kl) -> str:
     if tfidf > 0.2 or length > 0.3 or kl > 0.5:
@@ -118,7 +117,46 @@ def detect_policy_change(tfidf, length, kl) -> str:
 
 
 # ===============================
-# CSV Logger
+# FILE-LEVEL DRIFT
+# ===============================
+def detect_file_level_changes(
+    baseline_docs: Dict[str, str],
+    current_docs: Dict[str, str],
+    threshold: float = 0.85
+) -> List[Dict]:
+
+    results = []
+    vectorizer = TfidfVectorizer(max_features=1000)
+
+    # NEW / MODIFIED / UNCHANGED
+    for file_name, new_text in current_docs.items():
+
+        if file_name not in baseline_docs:
+            results.append({"file_name": file_name, "status": "NEW"})
+            continue
+
+        old_text = baseline_docs[file_name]
+
+        tfidf = vectorizer.fit_transform([old_text, new_text])
+        similarity = cosine_similarity(tfidf[0], tfidf[1])[0][0]
+
+        if similarity < threshold:
+            status = "MODIFIED"
+        else:
+            status = "UNCHANGED"
+
+        results.append({"file_name": file_name, "status": status})
+
+    # REMOVED
+    for file_name in baseline_docs:
+        if file_name not in current_docs:
+            results.append({"file_name": file_name, "status": "REMOVED"})
+
+    return results
+
+
+# ===============================
+# CSV LOG (GLOBAL)
 # ===============================
 def save_drift_log(log_data: Dict):
     DRIFT_DIR.mkdir(parents=True, exist_ok=True)
@@ -134,15 +172,36 @@ def save_drift_log(log_data: Dict):
 
 
 # ===============================
+# CSV LOG (FILE LEVEL)
+# ===============================
+def save_file_level_log(file_results: List[Dict], timestamp: str):
+    file_log_path = DRIFT_DIR / "document_file_level_drift_log.csv"
+
+    rows = []
+    for item in file_results:
+        rows.append({
+            "timestamp": timestamp,
+            "file_name": item["file_name"],
+            "status": item["status"]
+        })
+
+    df = pd.DataFrame(rows)
+
+    if file_log_path.exists():
+        df.to_csv(file_log_path, mode="a", header=False, index=False)
+    else:
+        df.to_csv(file_log_path, index=False)
+
+    logger.info(f"File-level drift log saved: {file_log_path}")
+
+
+# ===============================
 # MAIN FUNCTION
 # ===============================
 def run_drift_detection():
     logger.info("Running drift detection...")
 
     try:
-        # ===============================
-        # LOAD DOCUMENTS
-        # ===============================
         current_docs = load_processed_documents()
         baseline_docs = load_baseline()
 
@@ -151,7 +210,7 @@ def run_drift_detection():
             return
 
         # ===============================
-        # FIRST RUN → CREATE BASELINE + LOG
+        # FIRST RUN
         # ===============================
         if baseline_docs is None:
             logger.info("No baseline found. Creating baseline.")
@@ -166,16 +225,17 @@ def run_drift_detection():
                 "tfidf_shift": 0.0,
                 "length_drift": 0.0,
                 "kl_divergence": 0.0,
-                "policy_changed": "NO"
+                "policy_changed": "NO",
+                "changed_files": "None"
             }
 
             save_drift_log(log_data)
 
-            logger.info("Initial baseline created and logged successfully")
+            logger.info("Initial baseline created and logged")
             return
 
         # ===============================
-        # DRIFT COMPUTATION
+        # GLOBAL DRIFT
         # ===============================
         old_docs = list(baseline_docs.values())
         new_docs = list(current_docs.values())
@@ -185,7 +245,6 @@ def run_drift_detection():
         kl_div = compute_kl_divergence(old_docs, new_docs)
         timestamp = get_latest_timestamp()
 
-        # ✅ safer logging (no multiline f-string issues)
         logger.info(
             "Drift Metrics → TF-IDF: %.4f | Length: %.4f | KL: %.4f",
             tfidf_shift,
@@ -194,13 +253,22 @@ def run_drift_detection():
         )
 
         # ===============================
+        # FILE-LEVEL DRIFT
+        # ===============================
+        file_results = detect_file_level_changes(baseline_docs, current_docs)
+
+        changed_files = [
+            f"{item['file_name']} ({item['status']})"
+            for item in file_results
+            if item["status"] != "UNCHANGED"
+        ]
+
+        logger.info(f"Changed files: {changed_files}")
+
+        # ===============================
         # DECISION
         # ===============================
-        policy_changed = detect_policy_change(
-            tfidf_shift,
-            length_drift,
-            kl_div
-        )
+        policy_changed = detect_policy_change(tfidf_shift, length_drift, kl_div)
 
         # ===============================
         # LOGGING
@@ -211,13 +279,15 @@ def run_drift_detection():
             "tfidf_shift": tfidf_shift,
             "length_drift": length_drift,
             "kl_divergence": kl_div,
-            "policy_changed": policy_changed
+            "policy_changed": policy_changed,
+            "changed_files": ", ".join(changed_files) if changed_files else "None"
         }
 
         save_drift_log(log_data)
+        save_file_level_log(file_results, timestamp)
 
         # ===============================
-        # BASELINE UPDATE (IF DRIFT)
+        # BASELINE UPDATE
         # ===============================
         if policy_changed == "YES":
             logger.info("Policy change detected → updating baseline")
