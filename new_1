@@ -95,3 +95,45 @@ def chunk_documents(documents: Dict[str, str]) -> List[Dict]:
         raise
 
     return chunks
+
+
+
+
+import json
+from config.path import CHUNKS_DIR
+from HR_project_logging.project_logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def save_chunks(chunks):
+    try:
+        output_path = CHUNKS_DIR / "chunks.json"
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(chunks, f, indent=4, ensure_ascii=False)
+
+        logger.info(f"Chunks saved successfully at {output_path}")
+
+    except Exception:
+        logger.error("Failed to save chunks.", exc_info=True)
+        raise
+
+
+
+
+from helper import save_chunks
+
+try:
+    logger.info("Starting chunking step...")
+
+    chunks = chunk_documents(processed_docs)
+
+    logger.info(f"Chunking completed. Total chunks: {len(chunks)}")
+
+    # ✅ SAVE STEP (this was missing)
+    save_chunks(chunks)
+
+except Exception:
+    logger.error("Error occurred during chunking step.", exc_info=True)
+    raise
