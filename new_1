@@ -1,4 +1,74 @@
+
+# ===============================
+# Helper: Split into sentences
+# ===============================
+def split_into_sentences(text: str) -> List[str]:
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    return [s.strip() for s in sentences if s.strip()]
+
+
+# ===============================
+# Create chunks (CORE LOGIC)
+# ===============================
+def create_chunks(text: str) -> List[str]:
+    sentences = split_into_sentences(text)
+
+    chunks = []
+    current_chunk = []
+    current_length = 0
+
+    for sentence in sentences:
+        sentence_length = len(sentence.split())
+
+        if current_length + sentence_length > CHUNK_SIZE:
+            if current_chunk:
+                chunks.append(" ".join(current_chunk))
+
+            # overlap
+            overlap_words = " ".join(current_chunk).split()[-CHUNK_OVERLAP:]
+            current_chunk = [" ".join(overlap_words)]
+            current_length = len(overlap_words)
+
+        current_chunk.append(sentence)
+        current_length += sentence_length
+
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+
+    return chunks
+
+
+# ===============================
+# Save chunks
+# ===============================
+def save_chunks(chunks: List[Dict]):
+    try:
+        logger.info(f"Saving chunks to {CHUNK_FILE}")
+
+        with open(CHUNK_FILE, "w", encoding="utf-8") as f:
+            json.dump(chunks, f, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(f"Error saving chunks: {e}")
+        raise
+
+
+# ===============================
+# Main: Chunk documents
+# ===============================
 def chunk_documents(docs: Dict[str, Dict]) -> List[Dict]:
+    """
+    Input:
+        docs = {
+            filename: {
+                "sections": [...],
+                "document_id": ...,
+                "version": ...,
+                "effective_date": ...
+            }
+        }
+    """
     all_chunks = []
 
     try:
@@ -12,9 +82,13 @@ def chunk_documents(docs: Dict[str, Dict]) -> List[Dict]:
                 "effective_date": doc_data.get("effective_date")
             }
 
+            # 🔥 section-wise chunking
             for section in sections:
-                section_title = section.get("title", "UNKNOWN_SECTION")
+                section_title = section.get("title", "UNKNOWN")
                 section_text = section.get("content", "")
+
+                if not section_text.strip():
+                    continue
 
                 chunks = create_chunks(section_text)
 
@@ -30,7 +104,7 @@ def chunk_documents(docs: Dict[str, Dict]) -> List[Dict]:
                         "text": chunk,
                         "word_count": len(chunk.split()),
 
-                        # ✅ attach preprocessing metadata
+                        # metadata from preprocessing
                         **metadata
                     }
 
