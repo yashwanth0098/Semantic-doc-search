@@ -83,3 +83,120 @@ Answer:
 answer = llm.invoke(prompt)
 
 print("\nAnswer:\n", answer)
+
+
+
+
+
+
+
+
+# src/ingestion.py
+
+from pathlib import Path
+import os
+
+from config.path import (
+    RAW_PDF_DIR,
+    RAW_TEXT_DIR,
+    RAW_TABLES_DIR,
+    METADATA_DIR,
+    create_directories
+)
+
+from src.utils.helper import (
+    get_logger,
+    get_document_client,
+    get_pdf_files,
+    generate_metadata,
+    analyze_document,
+    save_metadata,
+    save_text,
+    save_tables
+)
+
+logger = get_logger(__name__)
+
+
+class DataIngestion:
+    def __init__(self):
+        try:
+            logger.info("Initializing DataIngestion pipeline")
+
+            create_directories()
+
+            self.endpoint = os.getenv("AZURE_DOC_INTELLIGENCE_ENDPOINT")
+            self.key = os.getenv("AZURE_DOC_INTELLIGENCE_KEY")
+
+            if not self.endpoint or not self.key:
+                raise ValueError("Azure credentials not found in environment variables")
+
+            self.client = get_document_client(self.endpoint, self.key)
+
+            logger.info("Azure Document Intelligence client initialized successfully")
+
+        except Exception as e:
+            logger.error(f"Initialization failed: {e}", exc_info=True)
+            raise
+
+    def process_single_pdf(self, pdf_path: Path):
+        try:
+            logger.info(f"Processing started: {pdf_path.name}")
+
+            # 1. Generate metadata
+            metadata = generate_metadata(pdf_path)
+            logger.info("Metadata generated")
+
+            # 2. Azure Document Intelligence analysis
+            result = analyze_document(self.client, pdf_path)
+            logger.info("Document analysis completed")
+
+            file_stem = pdf_path.stem
+
+            # 3. Save outputs
+            save_metadata(
+                metadata,
+                result,
+                METADATA_DIR / f"{file_stem}.json"
+            )
+
+            save_text(
+                result,
+                RAW_TEXT_DIR / f"{file_stem}.txt"
+            )
+
+            save_tables(
+                result,
+                RAW_TABLES_DIR / f"{file_stem}_tables.json"
+            )
+
+            logger.info(f"Processing completed: {pdf_path.name}")
+
+        except Exception as e:
+            logger.error(f"Error processing {pdf_path.name}: {e}", exc_info=True)
+            raise
+
+    def run(self):
+        try:
+            logger.info("Starting ingestion pipeline")
+
+            pdf_files = get_pdf_files(RAW_PDF_DIR)
+
+            if not pdf_files:
+                logger.warning("No PDFs found in raw directory")
+                return
+
+            logger.info(f"Found {len(pdf_files)} PDF(s) to process")
+
+            for pdf in pdf_files:
+                try:
+                    self.process_single_pdf(pdf)
+                except Exception as e:
+                    logger.error(f"Failed processing file: {pdf.name}", exc_info=True)
+                    continue  # continue processing next files
+
+            logger.info("Ingestion pipeline completed")
+
+        except Exception as e:
+            logger.error(f"Pipeline execution failed: {e}", exc_info=True)
+            raise
