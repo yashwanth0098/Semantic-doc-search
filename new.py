@@ -126,3 +126,107 @@ def run_drift_detection():
 
     except Exception as e:
         logger.exception("Drift detection failed: %s", str(e))
+
+
+
+
+
+
+def detect_file_level_changes(
+    baseline_docs: Dict[str, str],
+    current_docs: Dict[str, str],
+    similarity_threshold: float = 0.90,
+    length_threshold: float = 0.15
+) -> List[Dict]:
+
+    results = []
+
+    # ===============================
+    # FIT VECTORIZER ON ALL DOCS
+    # ===============================
+    all_docs = list(baseline_docs.values()) + list(current_docs.values())
+
+    vectorizer = TfidfVectorizer(max_features=2000, stop_words="english")
+    vectorizer.fit(all_docs)
+
+    # ===============================
+    # CURRENT FILES CHECK
+    # ===============================
+    for file_name, new_text in current_docs.items():
+
+        # NEW FILE
+        if file_name not in baseline_docs:
+            results.append({
+                "old_file_name": "NONE",
+                "new_file_name": file_name,
+                "status": "NEW",
+                "similarity": None,
+                "length_change": None
+            })
+            continue
+
+        old_text = baseline_docs[file_name]
+
+        vec_old = vectorizer.transform([old_text])
+        vec_new = vectorizer.transform([new_text])
+
+        similarity = cosine_similarity(vec_old, vec_new)[0][0]
+
+        old_len = len(old_text)
+        new_len = len(new_text)
+        length_change = abs(new_len - old_len) / (old_len + 1e-5)
+
+        # DECISION
+        if similarity < similarity_threshold or length_change > length_threshold:
+            status = "MODIFIED"
+        else:
+            status = "UNCHANGED"
+
+        results.append({
+            "old_file_name": file_name,
+            "new_file_name": file_name,
+            "status": status,
+            "similarity": round(float(similarity), 4),
+            "length_change": round(float(length_change), 4)
+        })
+
+    # ===============================
+    # REMOVED FILES
+    # ===============================
+    for file_name in baseline_docs:
+        if file_name not in current_docs:
+            results.append({
+                "old_file_name": file_name,
+                "new_file_name": "NONE",
+                "status": "REMOVED",
+                "similarity": None,
+                "length_change": None
+            })
+
+    return results
+
+
+
+
+
+
+def save_file_level_log(file_results: List[Dict], timestamp: str):
+    file_log_path = DRIFT_DIR / "document_file_level_drift_log.csv"
+
+    rows = []
+    for item in file_results:
+        rows.append({
+            "timestamp": timestamp,
+            "old_file_name": item["old_file_name"],
+            "new_file_name": item["new_file_name"],
+            "status": item["status"],
+            "similarity": item.get("similarity"),
+            "length_change": item.get("length_change")
+        })
+
+    df = pd.DataFrame(rows)
+
+    if file_log_path.exists():
+        df.to_csv(file_log_path, mode="a", header=False, index=False)
+    else:
+        df.to_csv(file_log_path, index=False)
