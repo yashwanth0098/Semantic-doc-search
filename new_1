@@ -1,121 +1,107 @@
+from pathlib import Path
+from typing import Dict
+from config.path import PROCESSED_DIR
+from HR_project_logging.project_logging import get_logger
 
-# ===============================
-# Helper: Split into sentences
-# ===============================
-def split_into_sentences(text: str) -> List[str]:
-    import re
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    return [s.strip() for s in sentences if s.strip()]
+logger = get_logger(__name__)
+
+def load_processed_documents() -> Dict[str, str]:
+    docs = {}
+
+    try:
+        txt_files = list(PROCESSED_DIR.glob("*.txt"))
+        json_files = list(PROCESSED_DIR.glob("*.json"))
+
+        if json_files:
+            logger.info(f"Found {len(json_files)} JSON files (metadata) in processed folder.")
+
+        if not txt_files:
+            logger.warning("No .txt files found in processed folder.")
+            return docs
+
+        for file in txt_files:
+            try:
+                with open(file, "r", encoding="utf-8") as f:
+                    docs[file.name] = f.read()
+
+            except Exception as file_error:
+                logger.error(f"Failed to load file: {file.name}", exc_info=True)
+
+        logger.info(f"Loaded {len(docs)} processed text documents.")
+
+    except Exception as e:
+        logger.error("Error loading processed documents.", exc_info=True)
+        raise e
+
+    return docs
 
 
-# ===============================
-# Create chunks (CORE LOGIC)
-# ===============================
-def create_chunks(text: str) -> List[str]:
-    sentences = split_into_sentences(text)
+
+
+
+
+
+
+
+from typing import Dict, List
+from HR_project_logging.project_logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def chunk_documents(
+    documents: Dict[str, str],
+    chunk_size: int = 500,
+    chunk_overlap: int = 50
+) -> List[Dict]:
+    """
+    Split documents into chunks with overlap.
+
+    Args:
+        documents: Dict[file_name, text]
+        chunk_size: max characters per chunk
+        chunk_overlap: overlap between chunks
+
+    Returns:
+        List of chunk dictionaries
+    """
 
     chunks = []
-    current_chunk = []
-    current_length = 0
-
-    for sentence in sentences:
-        sentence_length = len(sentence.split())
-
-        if current_length + sentence_length > CHUNK_SIZE:
-            if current_chunk:
-                chunks.append(" ".join(current_chunk))
-
-            # overlap
-            overlap_words = " ".join(current_chunk).split()[-CHUNK_OVERLAP:]
-            current_chunk = [" ".join(overlap_words)]
-            current_length = len(overlap_words)
-
-        current_chunk.append(sentence)
-        current_length += sentence_length
-
-    if current_chunk:
-        chunks.append(" ".join(current_chunk))
-
-    return chunks
-
-
-# ===============================
-# Save chunks
-# ===============================
-def save_chunks(chunks: List[Dict]):
-    try:
-        logger.info(f"Saving chunks to {CHUNK_FILE}")
-
-        with open(CHUNK_FILE, "w", encoding="utf-8") as f:
-            json.dump(chunks, f, indent=2, ensure_ascii=False)
-
-    except Exception as e:
-        logger.error(f"Error saving chunks: {e}")
-        raise
-
-
-# ===============================
-# Main: Chunk documents
-# ===============================
-def chunk_documents(docs: Dict[str, Dict]) -> List[Dict]:
-    """
-    Input:
-        docs = {
-            filename: {
-                "sections": [...],
-                "document_id": ...,
-                "version": ...,
-                "effective_date": ...
-            }
-        }
-    """
-    all_chunks = []
 
     try:
-        for doc_name, doc_data in docs.items():
-            logger.info(f"Chunking document: {doc_name}")
-
-            sections = doc_data.get("sections", [])
-            metadata = {
-                "document_id": doc_data.get("document_id"),
-                "version": doc_data.get("version"),
-                "effective_date": doc_data.get("effective_date")
-            }
-
-            # 🔥 section-wise chunking
-            for section in sections:
-                section_title = section.get("title", "UNKNOWN")
-                section_text = section.get("content", "")
-
-                if not section_text.strip():
+        for file_name, text in documents.items():
+            try:
+                if not text.strip():
+                    logger.warning(f"Skipping empty document: {file_name}")
                     continue
 
-                chunks = create_chunks(section_text)
+                start = 0
+                chunk_id = 0
+                text_length = len(text)
 
-                for idx, chunk in enumerate(chunks):
-                    if not chunk.strip():
-                        continue
+                while start < text_length:
+                    end = start + chunk_size
 
-                    chunk_data = {
-                        "chunk_id": str(uuid.uuid4()),
-                        "document_name": doc_name,
-                        "section_title": section_title,
-                        "chunk_index": idx,
-                        "text": chunk,
-                        "word_count": len(chunk.split()),
+                    chunk_text = text[start:end]
 
-                        # metadata from preprocessing
-                        **metadata
-                    }
+                    chunks.append({
+                        "chunk_id": f"{file_name}_chunk_{chunk_id}",
+                        "source_file": file_name,
+                        "text": chunk_text.strip()
+                    })
 
-                    all_chunks.append(chunk_data)
+                    chunk_id += 1
+                    start += (chunk_size - chunk_overlap)
 
-        logger.info(f"Total chunks created: {len(all_chunks)}")
+                logger.info(f"Chunked {file_name} into {chunk_id} chunks.")
 
-        save_chunks(all_chunks)
+            except Exception as file_error:
+                logger.error(f"Error processing file: {file_name}", exc_info=True)
 
-        return all_chunks
+        logger.info(f"Total chunks created: {len(chunks)}")
 
     except Exception as e:
-        logger.error(f"Error during chunking: {e}")
-        raise
+        logger.critical("Chunking failed at document level.", exc_info=True)
+        raise e
+
+    return chunks
