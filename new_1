@@ -43,24 +43,14 @@ def load_processed_documents() -> Dict[str, str]:
 
 
 
-from typing import Dict, List
-from HR_project_logging.project_logging import get_logger
-
-logger = get_logger(__name__)
 
 
-def chunk_documents(
-    documents: Dict[str, str],
-    chunk_size: int = 500,
-    chunk_overlap: int = 50
-) -> List[Dict]:
+def chunk_documents(documents: Dict[str, str]) -> List[Dict]:
     """
-    Split documents into chunks with overlap.
+    Split documents into chunks using global config.
 
     Args:
         documents: Dict[file_name, text]
-        chunk_size: max characters per chunk
-        chunk_overlap: overlap between chunks
 
     Returns:
         List of chunk dictionaries
@@ -71,7 +61,7 @@ def chunk_documents(
     try:
         for file_name, text in documents.items():
             try:
-                if not text.strip():
+                if not text or not text.strip():
                     logger.warning(f"Skipping empty document: {file_name}")
                     continue
 
@@ -80,7 +70,7 @@ def chunk_documents(
                 text_length = len(text)
 
                 while start < text_length:
-                    end = start + chunk_size
+                    end = start + CHUNK_SIZE
 
                     chunk_text = text[start:end]
 
@@ -91,17 +81,17 @@ def chunk_documents(
                     })
 
                     chunk_id += 1
-                    start += (chunk_size - chunk_overlap)
+                    start += (CHUNK_SIZE - CHUNK_OVERLAP)
 
-                logger.info(f"Chunked {file_name} into {chunk_id} chunks.")
+                logger.info(f"{file_name} → {chunk_id} chunks created.")
 
-            except Exception as file_error:
+            except Exception:
                 logger.error(f"Error processing file: {file_name}", exc_info=True)
 
         logger.info(f"Total chunks created: {len(chunks)}")
 
-    except Exception as e:
+    except Exception:
         logger.critical("Chunking failed at document level.", exc_info=True)
-        raise e
+        raise
 
     return chunks
