@@ -1,0 +1,47 @@
+def chunk_documents(docs: Dict[str, Dict]) -> List[Dict]:
+    all_chunks = []
+
+    try:
+        for doc_name, doc_data in docs.items():
+            logger.info(f"Chunking document: {doc_name}")
+
+            sections = doc_data.get("sections", [])
+            metadata = {
+                "document_id": doc_data.get("document_id"),
+                "version": doc_data.get("version"),
+                "effective_date": doc_data.get("effective_date")
+            }
+
+            for section in sections:
+                section_title = section.get("title", "UNKNOWN_SECTION")
+                section_text = section.get("content", "")
+
+                chunks = create_chunks(section_text)
+
+                for idx, chunk in enumerate(chunks):
+                    if not chunk.strip():
+                        continue
+
+                    chunk_data = {
+                        "chunk_id": str(uuid.uuid4()),
+                        "document_name": doc_name,
+                        "section_title": section_title,
+                        "chunk_index": idx,
+                        "text": chunk,
+                        "word_count": len(chunk.split()),
+
+                        # ✅ attach preprocessing metadata
+                        **metadata
+                    }
+
+                    all_chunks.append(chunk_data)
+
+        logger.info(f"Total chunks created: {len(all_chunks)}")
+
+        save_chunks(all_chunks)
+
+        return all_chunks
+
+    except Exception as e:
+        logger.error(f"Error during chunking: {e}")
+        raise
