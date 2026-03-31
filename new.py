@@ -230,3 +230,38 @@ def save_file_level_log(file_results: List[Dict], timestamp: str):
         df.to_csv(file_log_path, mode="a", header=False, index=False)
     else:
         df.to_csv(file_log_path, index=False)
+
+
+
+
+
+
+
+def build_drift_summary(results):
+    changed_files = []
+    old_files = []
+
+    for r in results:
+        status = r["status"]
+        old_name = r["old_file_name"]
+        new_name = r["new_file_name"]
+
+        # Track old files (baseline snapshot)
+        if old_name != "NONE":
+            old_files.append(old_name)
+
+        # Build changed file list
+        if status == "NEW":
+            changed_files.append(f"{new_name} (NEW)")
+
+        elif status == "MODIFIED":
+            changed_files.append(f"{new_name} (MODIFIED)")
+
+        elif status == "REMOVED":
+            changed_files.append(f"{old_name} (REMOVED)")
+
+    return {
+        "old_policy_name": ", ".join(sorted(set(old_files))) if old_files else None,
+        "changed_policy_name": ", ".join(changed_files) if changed_files else None,
+        "changed_status": "YES" if changed_files else "NO"
+    }
