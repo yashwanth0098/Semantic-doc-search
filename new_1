@@ -195,3 +195,72 @@ def generate_embeddings(chunks, batch_size=20):
         raise
 
     return embeddings
+
+
+
+
+
+def evaluate_embedding_drift(old_embeddings, new_embeddings):
+    thresholds = {
+        "centroid": 0.5,
+        "cosine": 0.90,
+        "l2_mean": 0.1,
+        "l2_std": 0.1
+    }
+
+    results = {}
+
+    c_shift = centroid_shift(old_embeddings, new_embeddings)
+    cos_sim = average_cosine_similarity(old_embeddings, new_embeddings)
+    l2_stats = l2_drift(old_embeddings, new_embeddings)
+
+    results["centroid_shift"] = c_shift
+    results["avg_cosine_similarity"] = cos_sim
+    results.update(l2_stats)
+
+    flags = []
+
+    if c_shift > thresholds["centroid"]:
+        flags.append("centroid")
+
+    if cos_sim < thresholds["cosine"]:
+        flags.append("cosine")
+
+    if l2_stats["mean_shift"] > thresholds["l2_mean"]:
+        flags.append("l2_mean")
+
+    if l2_stats["std_shift"] > thresholds["l2_std"]:
+        flags.append("l2_std")
+
+    return {
+        "drift_detected": len(flags) > 0,
+        "flags": flags,
+        "metrics": results
+    }
+
+
+# ===============================
+# Save CSV
+# ===============================
+
+def save_drift_to_csv(result, output_path):
+    row = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "drift_detected": result["drift_detected"],
+        "centroid_shift": result["metrics"].get("centroid_shift"),
+        "avg_cosine_similarity": result["metrics"].get("avg_cosine_similarity"),
+        "l2_mean_shift": result["metrics"].get("mean_shift"),
+        "l2_std_shift": result["metrics"].get("std_shift"),
+        "flags": ",".join(result.get("flags", []))
+    }
+
+    df = pd.DataFrame([row])
+
+    df.to_csv(
+        output_path,
+        mode="a",
+        header=not pd.io.common.file_exists(output_path),
+        index=False
+    )
+
+    logger.info(f"Drift saved to {output_path}")
