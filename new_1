@@ -137,3 +137,61 @@ try:
 except Exception:
     logger.error("Error occurred during chunking step.", exc_info=True)
     raise
+
+
+
+
+
+
+from openai import AzureOpenAI
+from dotenv import load_dotenv
+import os
+from tqdm import tqdm
+from HR_project_logging.project_logging import get_logger
+
+logger = get_logger(__name__)
+
+load_dotenv()
+
+client = AzureOpenAI(
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
+)
+
+DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
+
+
+def generate_embeddings(chunks, batch_size=20):
+    embeddings = []
+
+    try:
+        for i in tqdm(range(0, len(chunks), batch_size)):
+            batch = chunks[i:i + batch_size]
+
+            texts = [c["text"] for c in batch]
+
+            try:
+                response = client.embeddings.create(
+                    model=DEPLOYMENT_NAME,
+                    input=texts
+                )
+
+                for j, emb in enumerate(response.data):
+                    embeddings.append({
+                        "chunk_id": batch[j]["chunk_id"],
+                        "source_file": batch[j]["source_file"],
+                        "text": batch[j]["text"],
+                        "embedding": emb.embedding
+                    })
+
+            except Exception:
+                logger.error(f"Embedding batch failed at index {i}", exc_info=True)
+
+        logger.info(f"Generated embeddings for {len(embeddings)} chunks.")
+
+    except Exception:
+        logger.critical("Embedding generation failed.", exc_info=True)
+        raise
+
+    return embeddings
