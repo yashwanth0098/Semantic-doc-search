@@ -264,3 +264,72 @@ def save_drift_to_csv(result, output_path):
     )
 
     logger.info(f"Drift saved to {output_path}")
+
+
+
+
+
+
+import asyncio
+import websockets
+import json
+import uuid
+from datetime import datetime
+
+# 🔧 PUT YOUR ACTUAL WS URL HERE
+WS_URL = "ws://localhost:8000/ws"   # 👈 change this
+
+
+async def test_ws():
+    session_id = str(uuid.uuid4())
+
+    payload = {
+        "query": "What is the leave policy?",
+        "email": "testuser@company.com",
+        "session_id": session_id,
+        "access_token": "dummy_token",   # replace if needed
+        "local_time": datetime.now().isoformat(),
+        "tone": "formal"
+    }
+
+    print("🚀 Connecting to WebSocket...")
+
+    try:
+        async with websockets.connect(WS_URL) as ws:
+            print("Connected (Handshake successful)\n")
+
+            #  Send query
+            await ws.send(json.dumps(payload))
+            print(" Sent query\n")
+
+            # Receive response (handle streaming safely)
+            final_answer = ""
+            
+            while True:
+                response = await ws.recv()
+                data = json.loads(response)
+
+                print(" Incoming:", data)
+
+                # CASE 1: streaming chunks
+                if "chunk" in data:
+                    final_answer += data["chunk"]
+
+                #  CASE 2: final response
+                if data.get("status") == "completed":
+                    final_answer = data.get("response", final_answer)
+                    break
+
+                # fallback safety
+                if "response" in data:
+                    final_answer = data["response"]
+                    break
+
+            print("\nFINAL ANSWER:\n", final_answer)
+
+    except Exception as e:
+        print("\n ERROR:", str(e))
+
+
+if __name__ == "__main__":
+    asyncio.run(test_ws())
