@@ -1,335 +1,227 @@
-from pathlib import Path
-from typing import Dict
-from config.path import PROCESSED_DIR
-from HR_project_logging.project_logging import get_logger
+def __init__(self, base_url, access_token, headers=None):
+        self.ws_url = build_ws_url(base_url, access_token)
+        self.headers = headers or []
 
-logger = get_logger(__name__)
+    def query(self, question: str):
 
-def load_processed_documents() -> Dict[str, str]:
-    docs = {}
+        session_id = f"eval-{int(time.time() * 1000)}"
 
-    try:
-        txt_files = list(PROCESSED_DIR.glob("*.txt"))
-        json_files = list(PROCESSED_DIR.glob("*.json"))
+        payload = {
+            "client": "Edge",
+            "query": question,
+            "email": "",
+            "session_id": session_id,
+            "local_time": datetime.now().isoformat(),
+            "tone": "formal",
+            "access_token": None
+        }
 
-        if json_files:
-            logger.info(f"Found {len(json_files)} JSON files (metadata) in processed folder.")
+        ws = websocket.WebSocket()
 
-        if not txt_files:
-            logger.warning("No .txt files found in processed folder.")
-            return docs
+        ws.connect(
+            self.ws_url,
+            sslopt={
+                "cert_reqs": ssl.CERT_NONE,
+                "check_hostname": False
+            },
+            header=self.headers
+        )
 
-        for file in txt_files:
+        final_answer = ""
+        chunks = []
+        metadata = {}
+
+        ws.send(json.dumps(payload))
+
+        while True:
+            message = ws.recv()
+
             try:
-                with open(file, "r", encoding="utf-8") as f:
-                    docs[file.name] = f.read()
+                data = json.loads(message)
+            except:
+                continue
 
-            except Exception as file_error:
-                logger.error(f"Failed to load file: {file.name}", exc_info=True)
+            if "chunk" in data:
+                chunks.append(data["chunk"])
+                final_answer += data["chunk"]
 
-        logger.info(f"Loaded {len(docs)} processed text documents.")
+            if "usage" in data:
+                metadata["usage"] = data["usage"]
 
-    except Exception as e:
-        logger.error("Error loading processed documents.", exc_info=True)
-        raise e
+            if data.get("status") == "completed":
+                final_answer = data.get("response", final_answer)
+                metadata.update(data)
+                break
 
-    return docs
+        ws.close()
 
-
-
-
-
-
-
-
-
-
-
-def chunk_documents(documents: Dict[str, str]) -> List[Dict]:
-    """
-    Split documents into chunks using global config.
-
-    Args:
-        documents: Dict[file_name, text]
-
-    Returns:
-        List of chunk dictionaries
-    """
-
-    chunks = []
-
-    try:
-        for file_name, text in documents.items():
-            try:
-                if not text or not text.strip():
-                    logger.warning(f"Skipping empty document: {file_name}")
-                    continue
-
-                start = 0
-                chunk_id = 0
-                text_length = len(text)
-
-                while start < text_length:
-                    end = start + CHUNK_SIZE
-
-                    chunk_text = text[start:end]
-
-                    chunks.append({
-                        "chunk_id": f"{file_name}_chunk_{chunk_id}",
-                        "source_file": file_name,
-                        "text": chunk_text.strip()
-                    })
-
-                    chunk_id += 1
-                    start += (CHUNK_SIZE - CHUNK_OVERLAP)
-
-                logger.info(f"{file_name} → {chunk_id} chunks created.")
-
-            except Exception:
-                logger.error(f"Error processing file: {file_name}", exc_info=True)
-
-        logger.info(f"Total chunks created: {len(chunks)}")
-
-    except Exception:
-        logger.critical("Chunking failed at document level.", exc_info=True)
-        raise
-
-    return chunks
+        return {
+            "answer": final_answer,
+            "chunks": chunks,
+            "metadata": metadata
+        }
 
 
 
-
-import json
-from config.path import CHUNKS_DIR
-from HR_project_logging.project_logging import get_logger
-
-logger = get_logger(__name__)
+# evaluation/hr/metrics.py
 
 
-def save_chunks(chunks):
-    try:
-        output_path = CHUNKS_DIR / "chunks.json"
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(chunks, f, indent=4, ensure_ascii=False)
-
-        logger.info(f"Chunks saved successfully at {output_path}")
-
-    except Exception:
-        logger.error("Failed to save chunks.", exc_info=True)
-        raise
+from difflib import SequenceMatcher
 
 
+def similarity(a, b):
+    return SequenceMatcher(None, a, b).ratio()
 
 
-from helper import save_chunks
+def faithfulness(answer, context):
+    if not context:
+        return 0.0
+    return similarity(answer, context)
 
-try:
-    logger.info("Starting chunking step...")
 
-    chunks = chunk_documents(processed_docs)
+def hallucination_rate(answer, context):
+    if not context:
+        return 1.0
+    return 1 - similarity(answer, context)
 
-    logger.info(f"Chunking completed. Total chunks: {len(chunks)}")
 
-    # ✅ SAVE STEP (this was missing)
-    save_chunks(chunks)
+def answer_relevance(question, answer):
+    return similarity(question, answer)
 
-except Exception:
-    logger.error("Error occurred during chunking step.", exc_info=True)
-    raise
+
+def context_relevance(question, context):
+    return similarity(question, context)
+
+
+def confidence_score(hallucination):
+    return max(0, 1 - hallucination)
 
 
 
+# evaluation/hr/evaluator.py
 
-
-
-from openai import AzureOpenAI
-from dotenv import load_dotenv
-import os
-from tqdm import tqdm
-from HR_project_logging.project_logging import get_logger
-
-logger = get_logger(__name__)
-
-load_dotenv()
-
-client = AzureOpenAI(
-    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-    api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
-    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
+from evaluation.hr.metrics import (
+    faithfulness,
+    hallucination_rate,
+    answer_relevance,
+    context_relevance,
+    confidence_score
 )
 
-DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
 
+class HREvaluator:
 
-def generate_embeddings(chunks, batch_size=20):
-    embeddings = []
+    def evaluate(self, question, answer, context):
 
-    try:
-        for i in tqdm(range(0, len(chunks), batch_size)):
-            batch = chunks[i:i + batch_size]
+        f = faithfulness(answer, context)
+        h = hallucination_rate(answer, context)
+        ar = answer_relevance(question, answer)
+        cr = context_relevance(question, context)
+        cs = confidence_score(h)
 
-            texts = [c["text"] for c in batch]
-
-            try:
-                response = client.embeddings.create(
-                    model=DEPLOYMENT_NAME,
-                    input=texts
-                )
-
-                for j, emb in enumerate(response.data):
-                    embeddings.append({
-                        "chunk_id": batch[j]["chunk_id"],
-                        "source_file": batch[j]["source_file"],
-                        "text": batch[j]["text"],
-                        "embedding": emb.embedding
-                    })
-
-            except Exception:
-                logger.error(f"Embedding batch failed at index {i}", exc_info=True)
-
-        logger.info(f"Generated embeddings for {len(embeddings)} chunks.")
-
-    except Exception:
-        logger.critical("Embedding generation failed.", exc_info=True)
-        raise
-
-    return embeddings
+        return {
+            "faithfulness": f,
+            "hallucination_rate": h,
+            "answer_relevance": ar,
+            "context_relevance": cr,
+            "confidence_score": cs
+        }
 
 
 
+# utils/token_utils.py
 
+def extract_token_usage(metadata):
 
-def evaluate_embedding_drift(old_embeddings, new_embeddings):
-    thresholds = {
-        "centroid": 0.5,
-        "cosine": 0.90,
-        "l2_mean": 0.1,
-        "l2_std": 0.1
-    }
+    if "usage" in metadata:
+        return metadata["usage"]
 
-    results = {}
-
-    c_shift = centroid_shift(old_embeddings, new_embeddings)
-    cos_sim = average_cosine_similarity(old_embeddings, new_embeddings)
-    l2_stats = l2_drift(old_embeddings, new_embeddings)
-
-    results["centroid_shift"] = c_shift
-    results["avg_cosine_similarity"] = cos_sim
-    results.update(l2_stats)
-
-    flags = []
-
-    if c_shift > thresholds["centroid"]:
-        flags.append("centroid")
-
-    if cos_sim < thresholds["cosine"]:
-        flags.append("cosine")
-
-    if l2_stats["mean_shift"] > thresholds["l2_mean"]:
-        flags.append("l2_mean")
-
-    if l2_stats["std_shift"] > thresholds["l2_std"]:
-        flags.append("l2_std")
+    # fallback estimation
+    text = metadata.get("response", "")
+    tokens = int(len(text.split()) * 1.3)
 
     return {
-        "drift_detected": len(flags) > 0,
-        "flags": flags,
-        "metrics": results
+        "prompt_tokens": None,
+        "completion_tokens": tokens,
+        "total_tokens": tokens
     }
 
 
-# ===============================
-# Save CSV
-# ===============================
-
-def save_drift_to_csv(result, output_path):
-    row = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "drift_detected": result["drift_detected"],
-        "centroid_shift": result["metrics"].get("centroid_shift"),
-        "avg_cosine_similarity": result["metrics"].get("avg_cosine_similarity"),
-        "l2_mean_shift": result["metrics"].get("mean_shift"),
-        "l2_std_shift": result["metrics"].get("std_shift"),
-        "flags": ",".join(result.get("flags", []))
-    }
-
-    df = pd.DataFrame([row])
-
-    df.to_csv(
-        output_path,
-        mode="a",
-        header=not pd.io.common.file_exists(output_path),
-        index=False
-    )
-
-    logger.info(f"Drift saved to {output_path}")
 
 
+#pipeline/hr_pipeline.py
 
 
-
-
-import asyncio
-import websockets
 import json
-import uuid
-from datetime import datetime
+from config.settings import Settings
+from orchestrator_at_evaluation_side_to_production_side.orchestrator import RAGOrchestrator
+from evaluation.hr.evaluator import HREvaluator
+from utils.token_utils import extract_token_usage
 
-# 🔧 PUT YOUR ACTUAL WS URL HERE
-WS_URL = "ws://localhost:8000/ws"   # 👈 change this
+
+class HRPipeline:
+
+    def __init__(self):
+        self.orchestrator = RAGOrchestrator(
+            Settings.WS_BASE_URL,
+            Settings.ACCESS_TOKEN,
+            Settings.WS_HEADERS
+        )
+        self.evaluator = HREvaluator()
+
+    def run(self):
+
+        # Load questions
+        with open(Settings.HR_INPUT_PATH, "r") as f:
+            questions = json.load(f)
+
+        results = []
+
+        # Batch processing (simple loop)
+        for item in questions:
+
+            question = item["question"]
+            print(f"\nProcessing: {question}")
+
+            # 1. Call RAG
+            response = self.orchestrator.query(question)
+
+            answer = response["answer"]
+            context = " ".join(response["chunks"])
+            metadata = response["metadata"]
+
+            # 2. Evaluate
+            metrics = self.evaluator.evaluate(
+                question,
+                answer,
+                context
+            )
+
+            # 3. Token usage
+            tokens = extract_token_usage(metadata)
+
+            result = {
+                "question": question,
+                "answer": answer,
+                "tokens": tokens,
+                "metrics": metrics
+            }
+
+            results.append(result)
+
+        # Save output
+        with open(Settings.HR_OUTPUT_PATH, "w") as f:
+            json.dump(results, f, indent=4)
+
+        print("\n✅ HR Evaluation Completed")
 
 
-async def test_ws():
-    session_id = str(uuid.uuid4())
 
-    payload = {
-        "query": "What is the leave policy?",
-        "email": "testuser@company.com",
-        "session_id": session_id,
-        "access_token": "dummy_token",   # replace if needed
-        "local_time": datetime.now().isoformat(),
-        "tone": "formal"
-    }
 
-    print("🚀 Connecting to WebSocket...")
+main.py
 
-    try:
-        async with websockets.connect(WS_URL) as ws:
-            print("Connected (Handshake successful)\n")
-
-            #  Send query
-            await ws.send(json.dumps(payload))
-            print(" Sent query\n")
-
-            # Receive response (handle streaming safely)
-            final_answer = ""
-            
-            while True:
-                response = await ws.recv()
-                data = json.loads(response)
-
-                print(" Incoming:", data)
-
-                # CASE 1: streaming chunks
-                if "chunk" in data:
-                    final_answer += data["chunk"]
-
-                #  CASE 2: final response
-                if data.get("status") == "completed":
-                    final_answer = data.get("response", final_answer)
-                    break
-
-                # fallback safety
-                if "response" in data:
-                    final_answer = data["response"]
-                    break
-
-            print("\nFINAL ANSWER:\n", final_answer)
-
-    except Exception as e:
-        print("\n ERROR:", str(e))
-
+from pipeline.hr_pipeline import HRPipeline
 
 if __name__ == "__main__":
-    asyncio.run(test_ws())
+    pipeline = HRPipeline()
+    pipeline.run()
