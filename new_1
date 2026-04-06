@@ -279,3 +279,112 @@ def faithfulness(answer, context):
     if not context:
         return 0.0
     return similarity(answer, context)
+
+
+
+
+
+
+
+evaluation/it/evaluator.py
+
+
+
+from evaluation.it.metrics import (
+    precision_at_k,
+    recall_at_k,
+    mean_reciprocal_rank,
+    answer_relevance,
+    faithfulness
+)
+
+
+class ITEvaluator:
+
+    def evaluate(self, question, answer, retrieved_chunks, ground_truth_chunks):
+
+        context = " ".join(retrieved_chunks)
+
+        return {
+            "precision@k": precision_at_k(retrieved_chunks, ground_truth_chunks),
+            "recall@k": recall_at_k(retrieved_chunks, ground_truth_chunks),
+            "mrr": mean_reciprocal_rank(retrieved_chunks, ground_truth_chunks),
+            "answer_relevance": answer_relevance(question, answer),
+            "faithfulness": faithfulness(answer, context)
+        }
+
+
+
+
+
+
+
+pipeline/it_pipeline.py
+
+
+
+
+import json
+import os
+
+from config.settings import Settings
+from orchestrator_at_evaluation_side_to_production_side.orchestrator import RAGOrchestrator
+from evaluation.it.evaluator import ITEvaluator
+from utils.token_utils import extract_token_usage
+
+
+class ITPipeline:
+
+    def __init__(self):
+        self.orchestrator = RAGOrchestrator(
+            Settings.WS_BASE_URL,
+            Settings.ACCESS_TOKEN,
+            Settings.WS_HEADERS
+        )
+        self.evaluator = ITEvaluator()
+
+    def run(self):
+
+        with open(Settings.IT_INPUT_PATH, "r") as f:
+            questions = json.load(f)
+
+        results = []
+
+        for item in questions:
+
+            question = item["question"]
+            ground_truth_chunks = item.get("ground_truth_chunks", [])
+
+            print(f"\nProcessing: {question}")
+
+            # Call RAG
+            response = self.orchestrator.query(question)
+
+            answer = response["answer"]
+            retrieved_chunks = response["chunks"]
+            metadata = response["metadata"]
+
+            # Evaluate
+            metrics = self.evaluator.evaluate(
+                question,
+                answer,
+                retrieved_chunks,
+                ground_truth_chunks
+            )
+
+            tokens = extract_token_usage(metadata)
+
+            results.append({
+                "question": question,
+                "answer": answer,
+                "tokens": tokens,
+                "metrics": metrics
+            })
+
+        # save
+        os.makedirs(os.path.dirname(Settings.IT_OUTPUT_PATH), exist_ok=True)
+
+        with open(Settings.IT_OUTPUT_PATH, "w") as f:
+            json.dump(results, f, indent=4)
+
+        print("\n✅ IT Evaluation Completed")
