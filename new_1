@@ -527,3 +527,66 @@ SELECT
 
 FROM OrgHierarchy
 ORDER BY HierarchyLevel, ISNO;
+
+
+
+
+
+
+
+CREATE PROCEDURE sp_get_employee_hierarchy
+    @email NVARCHAR(100)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @root_psno INT;
+
+    -- Get PSNO using email
+    SELECT @root_psno = psno
+    FROM employees
+    WHERE LOWER(email) = LOWER(@email);
+
+    -- Safety check
+    IF @root_psno IS NULL
+    BEGIN
+        PRINT 'Invalid Email ID';
+        RETURN;
+    END
+
+    -- Recursive hierarchy
+    WITH employee_hierarchy AS (
+        
+        SELECT 
+            psno,
+            name,
+            email,
+            manager_psno,
+            0 AS level
+        FROM employees
+        WHERE psno = @root_psno
+
+        UNION ALL
+
+        SELECT 
+            e.psno,
+            e.name,
+            e.email,
+            e.manager_psno,
+            eh.level + 1
+        FROM employees e
+        INNER JOIN employee_hierarchy eh
+            ON e.manager_psno = eh.psno
+    )
+
+    SELECT 
+        psno,
+        name,
+        email,
+        manager_psno,
+        level
+    FROM employee_hierarchy
+    WHERE level > 0
+    ORDER BY level, manager_psno;
+
+END;
