@@ -388,3 +388,142 @@ class ITPipeline:
             json.dump(results, f, indent=4)
 
         print("\n✅ IT Evaluation Completed")
+
+
+
+
+
+-- =============================================
+-- ENTER ANY PERSON'S EMAIL — CEO, CIO, DH, Manager
+-- They will see ALL employees below them
+-- =============================================
+
+DECLARE @MY_PSNO VARCHAR(50);
+
+-- Step 1: Find PSNO from the email entered
+SELECT @MY_PSNO = PSNO
+FROM EmployeeTable
+WHERE Email = 'anyone@company.com';   -- << Just change this email
+
+-- =============================================
+-- Step 2: UNION External + Internal first
+-- =============================================
+WITH CombinedEmployees AS (
+
+    SELECT
+        PSNO,
+        EmpName,
+        Designation,
+        Email,
+        ISNO,
+        NSPSNO,
+        'External'          AS EmpType,
+        ContractorName,     -- << External specific column
+        VendorName,         -- << External specific column
+        ContractStartDate,  -- << External specific column
+        ContractEndDate,    -- << External specific column
+        NULL                AS Department,
+        NULL                AS CostCenter,
+        NULL                AS InternalGrade
+    FROM ExternalTable      -- << Replace with actual table name
+
+    UNION ALL
+
+    SELECT
+        PSNO,
+        EmpName,
+        Designation,
+        Email,
+        ISNO,
+        NSPSNO,
+        'Internal'          AS EmpType,
+        NULL                AS ContractorName,
+        NULL                AS VendorName,
+        NULL                AS ContractStartDate,
+        NULL                AS ContractEndDate,
+        Department,         -- << Internal specific column
+        CostCenter,         -- << Internal specific column
+        InternalGrade       -- << Internal specific column
+    FROM InternalTable      -- << Replace with actual table name
+),
+
+-- =============================================
+-- Step 3: Recursive CTE — goes ALL levels down
+-- Automatically handles CEO → CIO → DH → Manager → Employee
+-- =============================================
+OrgHierarchy AS (
+
+    -- Anchor: direct reportees of the person who logged in
+    SELECT
+        ce.PSNO,
+        ce.EmpName,
+        ce.Designation,
+        ce.Email,
+        ce.ISNO,
+        ce.NSPSNO,
+        ce.EmpType,
+        ce.ContractorName,
+        ce.VendorName,
+        ce.ContractStartDate,
+        ce.ContractEndDate,
+        ce.Department,
+        ce.CostCenter,
+        ce.InternalGrade,
+        1                   AS HierarchyLevel,
+        CAST(ce.EmpName AS VARCHAR(500)) AS OrgPath  -- shows full chain
+    FROM CombinedEmployees ce
+    WHERE ce.ISNO = @MY_PSNO
+
+    UNION ALL
+
+    -- Recursive: keep going down level by level
+    SELECT
+        child.PSNO,
+        child.EmpName,
+        child.Designation,
+        child.Email,
+        child.ISNO,
+        child.NSPSNO,
+        child.EmpType,
+        child.ContractorName,
+        child.VendorName,
+        child.ContractStartDate,
+        child.ContractEndDate,
+        child.Department,
+        child.CostCenter,
+        child.InternalGrade,
+        parent.HierarchyLevel + 1,
+        CAST(parent.OrgPath + ' > ' + child.EmpName AS VARCHAR(500))
+    FROM CombinedEmployees child
+    INNER JOIN OrgHierarchy parent
+        ON child.ISNO = parent.PSNO
+)
+
+-- =============================================
+-- Step 4: Final output — all levels, all details
+-- =============================================
+SELECT
+    HierarchyLevel,
+    REPLICATE('  ', HierarchyLevel - 1) + EmpName   AS EmpName,   -- visual indent
+    Designation,
+    Email,
+    PSNO,
+    ISNO,
+    NSPSNO,
+    EmpType,
+
+    -- External columns (NULL if Internal)
+    ContractorName,
+    VendorName,
+    ContractStartDate,
+    ContractEndDate,
+
+    -- Internal columns (NULL if External)
+    Department,
+    CostCenter,
+    InternalGrade,
+
+    OrgPath                                           -- full chain: A > B > C
+
+FROM OrgHierarchy
+ORDER BY HierarchyLevel, ISNO;
