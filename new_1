@@ -590,3 +590,68 @@ BEGIN
     ORDER BY level, manager_psno;
 
 END;
+
+
+
+
+
+
+CREATE PROCEDURE sp_get_employee_hierarchy
+    @email NVARCHAR(100)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @root_psno INT;
+
+    -- Step 1: Get PSNO from email
+    SELECT @root_psno = psno
+    FROM employees
+    WHERE LOWER(email) = LOWER(@email);
+
+    -- Step 2: Validation
+    IF @root_psno IS NULL
+    BEGIN
+        PRINT 'Invalid Email ID';
+        RETURN;
+    END
+
+    -- Step 3: Recursive CTE (Top-Down Hierarchy)
+    ;WITH employee_hierarchy AS (
+        
+        -- Root employee
+        SELECT 
+            psno,
+            name,
+            email,
+            manager_psno,
+            0 AS level
+        FROM employees
+        WHERE psno = @root_psno
+
+        UNION ALL
+
+        -- Get all reporting employees
+        SELECT 
+            e.psno,
+            e.name,
+            e.email,
+            e.manager_psno,
+            eh.level + 1
+        FROM employees e
+        INNER JOIN employee_hierarchy eh
+            ON e.manager_psno = eh.psno
+    )
+
+    -- Step 4: Final Output
+    SELECT 
+        psno,
+        name,
+        email,
+        manager_psno,
+        level
+    FROM employee_hierarchy
+    WHERE level > 0   -- remove if you want to include the input user
+    ORDER BY level, manager_psno;
+
+END;
