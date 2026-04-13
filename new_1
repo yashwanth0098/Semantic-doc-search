@@ -655,3 +655,37 @@ BEGIN
     ORDER BY level, manager_psno;
 
 END;
+
+
+
+
+
+WITH hierarchy AS (
+    SELECT psno, ispsno
+    FROM employees
+    WHERE psno = 'CEO_PSNO'
+
+    UNION ALL
+
+    SELECT e.psno, e.ispsno
+    FROM employees e
+    JOIN hierarchy h
+        ON e.ispsno = h.psno
+),
+invalid_manager AS (
+    SELECT e.psno
+    FROM employees e
+    LEFT JOIN employees m
+        ON e.ispsno = m.psno
+    WHERE e.ispsno IS NOT NULL
+      AND m.psno IS NULL
+)
+
+SELECT e.psno, e.ispsno
+FROM employees e
+LEFT JOIN hierarchy h
+    ON e.psno = h.psno
+LEFT JOIN invalid_manager im
+    ON e.psno = im.psno
+WHERE h.psno IS NULL
+  AND im.psno IS NULL;
